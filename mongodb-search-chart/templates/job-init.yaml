@@ -1,0 +1,111 @@
+{{- if .Values.initJob.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.general.name }}-init
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  ttlSecondsAfterFinished: {{ .Values.initJob.ttlSecondsAfterFinished | default 300 }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.general.name }}-init
+    spec:
+      serviceAccountName: {{ .Values.general.name }}-init-sa
+      restartPolicy: OnFailure
+      containers:
+      - name: init-rs
+        image: "{{ .Values.initJob.image.repository }}:{{ .Values.initJob.image.tag }}"
+        env:
+        - name: MONGO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.general.name }}-keyfile
+              key: root-pass
+        - name: MONGOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.general.name }}-keyfile
+              key: mongot-pass
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "Waiting for all mongod pods to be ready..."
+          {{- range $i, $e := until (int .Values.mongod.replicas) }}
+          kubectl wait --for=condition=Ready pod/{{ $.Values.general.name }}-{{ $i }} --timeout=300s
+          {{- end }}
+
+          echo "Checking Replica Set status on {{ .Values.general.name }}-0..."
+          kubectl exec {{ .Values.general.name }}-0 -- mongosh --quiet --eval '
+            try {
+              var status = rs.status();
+              if (status.ok === 1) {
+                print("Replica Set already initialized.");
+              }
+            } catch (e) {
+              if (e.code === 13 || e.codeName === "Unauthorized") {
+                print("Replica Set already initialized and secured.");
+              } else {
+                print("Initializing Replica Set {{ .Values.general.replicaSetName }}...");
+                rs.initiate({
+                  _id: "{{ .Values.general.replicaSetName }}",
+                  members: [{{- range $i, $e := until (int .Values.mongod.replicas) }}
+                    { _id: {{ $i }}, host: "{{ $.Values.general.name }}-{{ $i }}.{{ $.Values.general.name }}-headless.{{ $.Release.Namespace }}.svc.cluster.local:27017" }{{- if ne (add 1 $i) (int $.Values.mongod.replicas) }},{{- end }}
+                  {{- end }}]
+                });
+              }
+            }
+          '
+
+          echo "Waiting for PRIMARY election on {{ .Values.general.name }}-0..."
+          until kubectl exec {{ .Values.general.name }}-0 -- mongosh --quiet --eval 'quit(db.hello().isWritablePrimary ? 0 : 1)' > /dev/null 2>&1; do
+            echo "Still waiting for PRIMARY election... sleeping 3s"
+            sleep 3
+          done
+          echo "PRIMARY elected!"
+
+          echo "1. Creating Admin User (root) via Localhost Exception..."
+          kubectl exec {{ .Values.general.name }}-0 -- mongosh --quiet --eval "
+            try {
+              db.getSiblingDB('admin').createUser({
+                user: 'root',
+                pwd: '${MONGO_ROOT_PASSWORD}',
+                roles: [{ role: 'root', db: 'admin' }]
+              });
+              print('User root created successfully.');
+            } catch(e) {
+              if (e.code === 51003 || e.code === 51 || (e.message && e.message.includes('already exists'))) {
+                print('User root already exists.');
+              } else {
+                print('Notice when creating root (may already be initialized): ' + e);
+              }
+            }
+          "
+
+          echo "2. Creating Mongot User (searchCoordinator)..."
+          kubectl exec {{ .Values.general.name }}-0 -- mongosh --quiet -u root -p "${MONGO_ROOT_PASSWORD}" --authenticationDatabase admin --eval "
+            try {
+              db.getSiblingDB('admin').createUser({
+                user: 'mongot',
+                pwd: '${MONGOT_PASSWORD}',
+                roles: [{ role: 'searchCoordinator', db: 'admin' }]
+              });
+              print('User mongot created successfully.');
+            } catch(e) {
+              if (e.code === 51003 || e.code === 51 || (e.message && e.message.includes('already exists'))) {
+                print('User mongot already exists.');
+              } else {
+                throw e;
+              }
+            }
+          "
+          echo "Cluster initialization completed successfully!"
+{{- end }}

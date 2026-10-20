@@ -1,0 +1,13 @@
+# Keyfiles and secrets
+mongo-keyfile
+*.key
+*.keyfile
+*.secret.yaml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Helm dependency/package files
+*.tgz
+.charts/

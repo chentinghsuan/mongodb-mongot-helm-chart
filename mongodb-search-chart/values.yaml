@@ -1,0 +1,62 @@
+# 叢集識別設定 (Cluster Identity)
+general:
+  name: "mongodb"
+  replicaSetName: "rs0"
+
+global:
+  # Kubernetes StorageClass，留空則使用叢集預設 StorageClass (例如 "standard-rwo", "gp3" 等)
+  storageClass: ""
+
+# 認證與密碼 (Authentication & Secrets)
+auth:
+  keyfile: ""
+  rootPassword: ""
+  mongotPassword: ""
+
+# 自動化叢集初始化 Job 設定 (Automated Replica Set & User Initialization)
+initJob:
+  enabled: true
+  image:
+    repository: bitnami/kubectl
+    tag: "latest"
+  ttlSecondsAfterFinished: 10
+
+# Mongod (資料庫節點) 設定
+mongod:
+  replicas: 3
+  image:
+    repository: mongodb/mongodb-community-server
+    tag: 8.2.3-ubi8
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  persistence:
+    enabled: true
+    size: 10Gi
+
+  # 服務暴露設定 (若不需要外部/內部獨立 LoadBalancer，保持為空陣列即可)
+  internalIPs: []
+  loadBalancerSourceRanges: []
+  externalIPs: []
+  externalSourceRanges: []
+
+# Mongot (全文檢索與向量檢索節點) 設定
+mongot:
+  replicas: 1
+  image:
+    repository: mongodb/mongodb-community-search
+    tag: 0.55.0
+  resources:
+    requests:
+      cpu: "200m"
+      memory: "512Mi"
+    limits:
+      cpu: "1000m"
+      memory: "2Gi"
+  persistence:
+    enabled: true
+    size: 10Gi

@@ -1,0 +1,88 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ .Values.general.name }}-vector-search-test"
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  restartPolicy: Never
+  containers:
+  - name: vector-search-test
+    image: "{{ .Values.mongod.image.repository }}:{{ .Values.mongod.image.tag }}"
+    env:
+    - name: MONGO_ROOT_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: {{ .Values.general.name }}-keyfile
+          key: root-pass
+    command:
+    - /bin/bash
+    - -c
+    - |
+      set -e
+      HOST_URI="mongodb://{{- range $i, $e := until (int .Values.mongod.replicas) }}{{ if $i }},{{ end }}{{ $.Values.general.name }}-{{ $i }}.{{ $.Values.general.name }}-headless.{{ $.Release.Namespace }}.svc.cluster.local:27017{{- end }}/admin?replicaSet={{ .Values.general.replicaSetName }}"
+
+      echo "Running E2E Native Vector Search (mongot) Verification..."
+      mongosh "$HOST_URI" --quiet -u root -p "$MONGO_ROOT_PASSWORD" --authenticationDatabase admin --eval '
+        const testDb = db.getSiblingDB("helm_vector_test");
+        testDb.dropDatabase();
+        const coll = testDb.getCollection("items");
+
+        print("1. Inserting sample vector documents...");
+        coll.insertMany([
+          { title: "Kubernetes Helm Chart", embedding: [1.0, 0.0, 0.0] },
+          { title: "MongoDB Vector Search", embedding: [0.9, 0.1, 0.0] },
+          { title: "Unrelated Topic",       embedding: [0.0, 0.0, 1.0] }
+        ]);
+
+        print("2. Creating native vectorSearch index via mongot gRPC...");
+        coll.createSearchIndex("vector_idx", "vectorSearch", {
+          fields: [
+            {
+              type: "vector",
+              path: "embedding",
+              numDimensions: 3,
+              similarity: "cosine"
+            }
+          ]
+        });
+
+        print("3. Waiting for mongot to sync index and executing $vectorSearch query...");
+        let results = [];
+        for (let i = 0; i < 30; i++) {
+          try {
+            results = coll.aggregate([
+              {
+                $vectorSearch: {
+                  index: "vector_idx",
+                  path: "embedding",
+                  queryVector: [1.0, 0.0, 0.0],
+                  numCandidates: 3,
+                  limit: 2
+                }
+              },
+              { $project: { _id: 0, title: 1 } }
+            ]).toArray();
+            if (results.length > 0) {
+              break;
+            }
+          } catch (e) {
+            // Index still building in mongot
+          }
+          sleep(1000);
+        }
+
+        print("Query results: " + EJSON.stringify(results));
+        if (results.length === 0 || results[0].title !== "Kubernetes Helm Chart") {
+          throw new Error("Unexpected vector search result!");
+        }
+
+        print("4. Cleaning up test database...");
+        testDb.dropDatabase();
+        print("SUCCESS: Native Vector Search (mongod <-> mongot) verified end-to-end!");
+      '
+

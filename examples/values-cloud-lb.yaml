@@ -1,0 +1,25 @@
+# [情境] 需透過 LoadBalancer 存取各節點並設定防火牆 CIDR 白名單
+general:
+  name: "mongodb-lb"
+  replicaSetName: "rs-cluster"
+
+global:
+  storageClass: "standard-rwo"
+
+mongod:
+  replicas: 3
+  # 內部 LoadBalancer 範例 (例如 GCP 內部負載平衡)
+  internalIPs:
+    - "10.0.1.10"
+    - "10.0.1.11"
+    - "10.0.1.12"
+  loadBalancerSourceRanges:
+    - "10.0.0.0/16"
+
+  # 外部 LoadBalancer 與公網 IP 白名單範例 (僅供範例，請替換為自己的靜態 IP)
+  externalIPs:
+    - "203.0.113.10"
+    - "203.0.113.11"
+    - "203.0.113.12"
+  externalSourceRanges:
+    - "198.51.100.0/24"  # 允許連線的管理網段 CIDR

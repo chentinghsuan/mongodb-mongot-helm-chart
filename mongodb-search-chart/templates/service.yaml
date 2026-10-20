@@ -1,0 +1,98 @@
+# 1. 內部溝通用 Headless Service (StatefulSet 必備)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.general.name }}-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}
+spec:
+  ports:
+  - name: mongodb
+    port: 27017
+    targetPort: 27017
+  clusterIP: None
+  selector:
+    app: {{ .Values.general.name }}
+---
+# 2. Mongot 搜尋引擎 (叢集內部連線與 Prometheus Metrics)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.general.name }}-mongot
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}-mongot
+spec:
+  type: ClusterIP
+  ports:
+  - name: grpc
+    port: 27028
+    targetPort: 27028
+  - name: health
+    port: 8080
+    targetPort: 8080
+  - name: metrics
+    port: 9946
+    targetPort: 9946
+  selector:
+    app: {{ .Values.general.name }}-mongot
+{{- if and .Values.mongod.internalIPs (gt (len .Values.mongod.internalIPs) 0) }}
+---
+# 3. Mongod 叢集內部 LoadBalancer (可選：指定內網靜態 IP 與防火牆白名單)
+{{- range $i, $e := until (int .Values.mongod.replicas) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Values.general.name }}-{{ $i }}-internal
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $.Values.general.name }}
+    pod-index: "{{ $i }}"
+  annotations:
+    networking.gke.io/load-balancer-type: "Internal"
+spec:
+  type: LoadBalancer
+  {{- with (index $.Values.mongod.internalIPs $i) }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with $.Values.mongod.loadBalancerSourceRanges }}
+  loadBalancerSourceRanges:
+  {{- toYaml . | nindent 4 }}
+  {{- end }}
+  ports:
+  - port: 27017
+    targetPort: 27017
+  selector:
+    statefulset.kubernetes.io/pod-name: {{ $.Values.general.name }}-{{ $i }}
+---
+{{- end }}
+{{- end }}
+{{- if and .Values.mongod.externalIPs (gt (len .Values.mongod.externalIPs) 0) }}
+# 4. Mongod 外部存取 LoadBalancer (可選：指定公網靜態 IP 與白名單 CIDR)
+{{- range $i, $e := until (int .Values.mongod.replicas) }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $.Values.general.name }}-{{ $i }}-external
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ $.Values.general.name }}
+    pod-index: "{{ $i }}"
+spec:
+  type: LoadBalancer
+  {{- with (index $.Values.mongod.externalIPs $i) }}
+  loadBalancerIP: {{ . | quote }}
+  {{- end }}
+  {{- with $.Values.mongod.externalSourceRanges }}
+  loadBalancerSourceRanges:
+  {{- toYaml . | nindent 4 }}
+  {{- end }}
+  ports:
+  - port: 27017
+    targetPort: 27017
+  selector:
+    statefulset.kubernetes.io/pod-name: {{ $.Values.general.name }}-{{ $i }}
+---
+{{- end }}
+{{- end }}

@@ -1,0 +1,28 @@
+# [情境] 本機開發 / Minikube / Kind 輕量測試設定
+general:
+  name: "mongodb-dev"
+  replicaSetName: "rs-dev"
+
+mongod:
+  replicas: 1  # 本機開發可簡化為單節點或 3 節點
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  persistence:
+    size: 2Gi
+
+mongot:
+  replicas: 1
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+  persistence:
+    size: 2Gi
