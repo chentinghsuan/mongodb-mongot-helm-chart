@@ -1,7 +1,7 @@
 # [情境] 團隊 UAT 測試環境 / 3 節點 Replica Set 配置範例
 general:
-  name: "mongodb-prod"
-  replicaSetName: "rs-prod"
+  name: "mongodb-rs"
+  replicaSetName: "rs-cluster"
 
 global:
   storageClass: "standard-rwo"  # 依雲端平台指定 (如 GCP standard-rwo, AWS gp3)

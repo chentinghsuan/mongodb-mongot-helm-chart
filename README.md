@@ -98,7 +98,7 @@ helm test my-mongo --logs
 
 ### 情境範例檔 (`examples/`)
 * **[examples/values-minimal.yaml](examples/values-minimal.yaml)**：適合個人測試或本機開發（Minikube / Kind），採單節點與輕量資源配置。
-* **[examples/values-production-ha.yaml](examples/values-production-ha.yaml)**：適合團隊共用 UAT 環境的 3 節點 Replica Set 配置，包含完整的資源限制與 PVC 容量設定。
+* **[examples/values-replica-set.yaml](examples/values-replica-set.yaml)**：適合團隊共用 UAT 環境的 3 節點 Replica Set 配置，包含完整的資源限制與 PVC 容量設定。
 * **[examples/values-cloud-lb.yaml](examples/values-cloud-lb.yaml)**：適合雲端 UAT 環境，展示如何為各節點配置專屬的 LoadBalancer 靜態 IP 與防火牆來源網段白名單 (CIDR)，方便開發人員從外部連線。
 
 ### 主要參數一覽 (`values.yaml`)
