@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.general.name }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}
+data:
+  mongod.conf: |
+    net:
+      port: 27017
+      bindIpAll: true
+    replication:
+      replSetName: {{ .Values.general.replicaSetName }}
+    setParameter:
+      searchIndexManagementHostAndPort: {{ .Values.general.name }}-mongot.{{ .Release.Namespace }}.svc.cluster.local:27028
+      mongotHost: {{ .Values.general.name }}-mongot.{{ .Release.Namespace }}.svc.cluster.local:27028
+      skipAuthenticationToSearchIndexManagementServer: false
+      useGrpcForSearch: true
+    security:
+      authorization: enabled
+      keyFile: /etc/mongodb-keyfile/keyfile
+
+  mongot.conf: |
+    syncSource:
+      replicaSet:
+        hostAndPort:
+          {{- range $i, $e := until (int .Values.mongod.replicas) }}
+          - "{{ $.Values.general.name }}-{{ $i }}.{{ $.Values.general.name }}-headless.{{ $.Release.Namespace }}.svc.cluster.local:27017"
+          {{- end }}
+        username: "mongot"
+        passwordFile: "/etc/mongot-pass/password"
+        authSource: "admin"
+        tls: false
+    storage:
+      dataPath: "/var/lib/mongot"
+    server:
+      grpc:
+        address: "0.0.0.0:27028"
+    metrics:
+      enabled: true
+      address: "0.0.0.0:9946"
+    healthCheck:
+      address: "0.0.0.0:8080"
+    logging:
+      verbosity: INFO

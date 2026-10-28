@@ -1,0 +1,124 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.general.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}
+spec:
+  serviceName: {{ .Values.general.name }}-headless
+  replicas: {{ .Values.mongod.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.general.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.general.name }}
+    spec:
+      # 1. Pod 層級非 Root 權限設定與 Volume 權限效能優化
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: "OnRootMismatch"
+
+      # 2. 高可用反親和性 (Soft Anti-Affinity：優先分散至不同實體節點，亦相容單節點開發環境)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: {{ .Values.general.name }}
+              topologyKey: kubernetes.io/hostname
+
+      initContainers:
+      # 3. 以非 Root (UID 999) 複製 Keyfile 並設定 MongoDB 嚴格要求的 0400 權限
+      - name: fix-keyfile-permissions
+        image: busybox:1.36
+        securityContext:
+          allowPrivilegeEscalation: false
+        command:
+        - sh
+        - -c
+        - cp /tmp/secret/keyfile /etc/mongodb-keyfile/keyfile && chmod 400 /etc/mongodb-keyfile/keyfile
+        volumeMounts:
+        - name: keyfile-source
+          mountPath: /tmp/secret
+        - name: keyfile-processed
+          mountPath: /etc/mongodb-keyfile
+
+      containers:
+      - name: mongod
+        image: "{{ .Values.mongod.image.repository }}:{{ .Values.mongod.image.tag }}"
+        resources:
+{{ toYaml .Values.mongod.resources | indent 10 }}
+        command:
+        - mongod
+        - "--config"
+        - "/etc/mongo/mongod.conf"
+        ports:
+        - name: mongodb
+          containerPort: 27017
+        readinessProbe:
+          exec:
+            command:
+            - mongosh
+            - --quiet
+            - --eval
+            - "db.adminCommand('ping').ok"
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+        livenessProbe:
+          exec:
+            command:
+            - mongosh
+            - --quiet
+            - --eval
+            - "db.adminCommand('ping').ok"
+          initialDelaySeconds: 30
+          periodSeconds: 20
+          timeoutSeconds: 10
+        volumeMounts:
+        - name: config-vol
+          mountPath: /etc/mongo
+        - name: data-vol
+          mountPath: /data/db
+        - name: keyfile-processed
+          mountPath: /etc/mongodb-keyfile
+          readOnly: true
+
+      volumes:
+      - name: config-vol
+        configMap:
+          name: {{ .Values.general.name }}-config
+          items:
+          - key: mongod.conf
+            path: mongod.conf
+      - name: keyfile-source
+        secret:
+          secretName: {{ .Values.general.name }}-keyfile
+      - name: keyfile-processed
+        emptyDir: {}
+      {{- if not .Values.mongod.persistence.enabled }}
+      - name: data-vol
+        emptyDir: {}
+      {{- end }}
+
+  {{- if .Values.mongod.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: data-vol
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      {{- if .Values.global.storageClass }}
+      storageClassName: {{ .Values.global.storageClass | quote }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.mongod.persistence.size }}
+  {{- end }}

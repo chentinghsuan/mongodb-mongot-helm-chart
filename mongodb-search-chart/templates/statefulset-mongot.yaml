@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.general.name }}-mongot
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ .Values.general.name }}-mongot
+spec:
+  serviceName: {{ .Values.general.name }}-mongot
+  replicas: {{ .Values.mongot.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.general.name }}-mongot
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.general.name }}-mongot
+    spec:
+      # 1. 讓 K8s 自動處理 /var/lib/mongot 的權限並強制以非 Root 運行
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        fsGroupChangePolicy: "OnRootMismatch"
+
+      initContainers:
+      # 2. 以非 Root (UID 999) 複製密碼檔案並設定 0400 權限
+      - name: fix-pass-permissions
+        securityContext:
+          allowPrivilegeEscalation: false
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - cp /tmp/secret/password /etc/mongot-pass/password && chmod 400 /etc/mongot-pass/password
+        volumeMounts:
+        - name: pass-source
+          mountPath: /tmp/secret
+        - name: pass-processed
+          mountPath: /etc/mongot-pass
+
+      # 3. 等待 mongot 使用者在 MongoDB Replica Set 裡建立完成 (透過 Secret 環境變數避免密碼明文外洩)
+      - name: wait-for-user
+        image: "{{ .Values.mongod.image.repository }}:{{ .Values.mongod.image.tag }}"
+        env:
+        - name: MONGOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Values.general.name }}-keyfile
+              key: mongot-pass
+        command:
+        - /bin/bash
+        - -c
+        - |
+          echo "Waiting for mongot user to be ready on Replica Set..."
+          HOST_URI="mongodb://{{ .Values.general.name }}-0.{{ .Values.general.name }}-headless.{{ .Release.Namespace }}.svc.cluster.local:27017/admin?replicaSet={{ .Values.general.replicaSetName }}"
+          until mongosh "$HOST_URI" --quiet -u mongot -p "$MONGOT_PASSWORD" --authenticationDatabase admin --eval "db.runCommand({ping:1})" > /dev/null 2>&1; do
+            echo "Mongot user not ready yet. Sleeping 5s..."
+            sleep 5
+          done
+          echo "Mongot user verified! Starting mongot container."
+
+      containers:
+      - name: mongot
+        image: "{{ .Values.mongot.image.repository }}:{{ .Values.mongot.image.tag }}"
+        resources:
+{{ toYaml .Values.mongot.resources | indent 10 }}
+        ports:
+        - name: grpc
+          containerPort: 27028
+        - name: health
+          containerPort: 8080
+        - name: metrics
+          containerPort: 9946
+        readinessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        livenessProbe:
+          tcpSocket:
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 20
+        volumeMounts:
+        - name: config-vol
+          mountPath: /mongot-community/config.default.yml
+          subPath: mongot.conf
+        - name: mongot-data
+          mountPath: /var/lib/mongot
+        - name: pass-processed
+          mountPath: /etc/mongot-pass
+          readOnly: true
+
+      volumes:
+      - name: config-vol
+        configMap:
+          name: {{ .Values.general.name }}-config
+          items:
+          - key: mongot.conf
+            path: mongot.conf
+      - name: pass-source
+        secret:
+          secretName: {{ .Values.general.name }}-keyfile
+          items:
+          - key: mongot-pass
+            path: password
+      - name: pass-processed
+        emptyDir: {}
+      {{- if not .Values.mongot.persistence.enabled }}
+      - name: mongot-data
+        emptyDir: {}
+      {{- end }}
+
+  {{- if .Values.mongot.persistence.enabled }}
+  volumeClaimTemplates:
+  - metadata:
+      name: mongot-data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      {{- if .Values.global.storageClass }}
+      storageClassName: {{ .Values.global.storageClass | quote }}
+      {{- end }}
+      resources:
+        requests:
+          storage: {{ .Values.mongot.persistence.size }}
+  {{- end }}

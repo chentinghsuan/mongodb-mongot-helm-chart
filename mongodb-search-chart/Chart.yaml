@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mongodb-search
+description: Lightweight Helm chart integrating MongoDB Community Replica Set (mongod) with Native Vector Search (mongot) for UAT and development environments
+type: application
+version: 0.1.0
+appVersion: "8.2"
